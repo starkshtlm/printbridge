@@ -1,0 +1,92 @@
+# printbridge — two services: a CUPS spooler and the MCP server.
+#
+# Ports: printbridge publishes ONLY to 127.0.0.1. The reverse proxy (host Caddy, Funnel or
+# cloudflared) is the single public face; CUPS publishes nothing at all and is reachable only on
+# the compose network. Do not change "127.0.0.1:" to "0.0.0.0:" — tests/test_compose.py fails if
+# you do, and the printer would then be one firewall mistake away from the internet.
+services:
+  cups:
+    build: ./cups
+    image: printbridge-cups:local
+    container_name: printbridge-cups
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # /etc/cups is deliberately NOT persisted: PRINTERS in .env is the source of truth and the
+      # entrypoint recreates every queue idempotently at each start. A volume there would freeze
+      # the shipped cupsd.conf forever and quietly break upgrades — and spec §19 is explicit that
+      # `.env` + `data/` are the only state.
+      - cups-spool:/var/spool/cups    # jobs held for a sleeping printer survive a restart
+      - ./data/mock-out:/out          # mock queue output; empty when a real printer is configured
+    networks: [printbridge]
+    mem_limit: 256m
+    cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "lpstat -r | grep -q 'is running'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  printbridge:
+    build: .
+    image: printbridge:local
+    container_name: printbridge
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CUPS_SERVER: cups:631
+      PRINTBRIDGE_DATA_DIR: /data
+      PRINTBRIDGE_IN_CONTAINER: "1"
+    depends_on:
+      cups:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"   # MCP — the host proxy is the only thing that may reach it
+      - "127.0.0.1:8001:8001"   # admin /status, /metrics — never proxied
+    volumes:
+      - ./data:/data          # keys, job log and the short-lived render spool
+    networks: [printbridge]
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "printbridge", "doctor", "--quiet", "--self"]
+      interval: 60s
+      timeout: 15s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # Only for hosts with nothing on 80/443 (EXPOSE=caddy). Off on a host that already runs a proxy
+  # (EXPOSE=caddy-host), which is why it sits behind a profile and is not started by default.
+  caddy:
+    image: caddy:2.11-alpine
+    container_name: printbridge-caddy
+    profiles: ["caddy"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [printbridge]
+    mem_limit: 256m
+    cpus: "0.5"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+volumes:
+  cups-spool: {}
+  caddy-data: {}
+  caddy-config: {}
+
+networks:
+  printbridge: {}
