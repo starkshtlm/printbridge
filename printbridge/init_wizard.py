@@ -19,7 +19,7 @@ import socket
 import subprocess
 from pathlib import Path
 
-from printbridge.config import load_settings
+from printbridge.config import ConfigError, load_settings
 from printbridge.runtime import build_runtime
 
 ENV_EXAMPLE = Path(__file__).resolve().parent.parent / ".env.example"
@@ -153,9 +153,18 @@ def run_init(args: argparse.Namespace) -> int:
     )
     public_url = args.public_url or ""
     if expose != "none" and not public_url:
-        public_url = _ask(
-            "Public address assistants will use (https://…)", "https://print.example.com", non_interactive
-        )
+        if non_interactive:
+            raise ConfigError(
+                f"--expose {expose} publishes this server, so --public-url is required "
+                "(e.g. --public-url https://print.example.com). Inventing a hostname here would "
+                "produce a configuration that cannot work."
+            )
+        public_url = _ask("Public address assistants will use (https://…)", "", False)
+        if not public_url:
+            raise ConfigError(
+                "A published server needs a public address. Re-run and give one, or choose "
+                "exposure 'none' for a local-only server."
+            )
 
     values = {
         "PRINTERS": f"{name}={printer_uri}",
@@ -169,8 +178,13 @@ def run_init(args: argparse.Namespace) -> int:
     os.chmod(env_path, 0o600)
     print(f"\n  wrote {env_path} (0600)")
 
-    # 3 — the first person
-    settings = load_settings()
+    # 3 — the first person. Validate before going further: a wizard that leaves behind a broken
+    # .env is worse than one that refuses, because the error surfaces later and elsewhere.
+    try:
+        settings = load_settings()
+    except ConfigError:
+        env_path.unlink(missing_ok=True)
+        raise
     runtime = build_runtime(settings)
     person = args.key or _ask("Who is the first person to use it?", "me", non_interactive) or "me"
     plaintext = ""
