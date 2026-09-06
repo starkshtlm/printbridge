@@ -67,8 +67,8 @@ def test_printer_parsing_forms():
 
 
 def test_legacy_single_printer_form_is_still_accepted():
-    specs = parse_printers("", legacy_uri="ipp://192.0.2.50/ipp/print", legacy_name="canon")
-    assert specs[0].name == "canon"
+    specs = parse_printers("", legacy_uri="ipp://192.0.2.50/ipp/print", legacy_name="downstairs")
+    assert specs[0].name == "downstairs"
 
 
 def test_mock_queue_is_recognised():

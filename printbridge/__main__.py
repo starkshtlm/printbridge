@@ -214,6 +214,81 @@ def cmd_keys(args: argparse.Namespace) -> int:
     return 0
 
 
+TEST_PAGE = """# printbridge test page
+
+If you are holding this on paper, everything works: the assistant's request reached this server,
+the document was rendered here, and your printer received it over your own private network.
+
+| Step | What it proves |
+|---|---|
+| Rendered on the server | markdown, tables and page numbers come out right |
+| Queued in CUPS | the printer is reachable and accepting jobs |
+| Printed | the whole path works end to end |
+
+Nothing about this page left your own infrastructure.
+
+Next: paste your connector link into Claude or ChatGPT and say
+*"print a test page on my printer"*.
+"""
+
+
+def cmd_test_page(args: argparse.Namespace) -> int:
+    """Print one page through the real path — render, count, spool — and say what happened."""
+    from printbridge.render import RenderError, render_to_pdf
+    from printbridge.server_helpers import spool_target
+    from printbridge.spool import PrintOptions, SpoolError
+
+    settings = _settings(args)
+    _drop_privileges(settings)
+    runtime = build_runtime(settings)
+    try:
+        spec = settings.printer_or_default(args.printer)
+    except ConfigError as exc:
+        print(f"  ✗ {exc}", file=sys.stderr)
+        return 1
+
+    target = spool_target(settings)
+    try:
+        result = render_to_pdf(
+            TEST_PAGE, target, title="printbridge test page",
+            paper=settings.default_paper, locale=settings.locale,
+        )
+    except RenderError as exc:
+        print(f"  ✗ could not render the test page: {exc}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        target.unlink(missing_ok=True)
+        print(f"  {result.pages} page(s) would go to {spec.name}. Nothing was printed.")
+        return 0
+
+    try:
+        job_id = runtime.spooler.submit(
+            target, spec.name,
+            PrintOptions(copies=1, duplex=False, color=False,
+                         paper=settings.default_paper, title="printbridge test page"),
+        )
+    except SpoolError as exc:
+        print(f"  ✗ {exc}", file=sys.stderr)
+        print("    Run `printbridge doctor` — it says which part is broken and what to do.")
+        return 1
+    finally:
+        if settings.keep_spool_hours == 0:
+            target.unlink(missing_ok=True)
+
+    runtime.store.record_job(
+        principal="local", tool="test_page", status="queued", job_id=job_id,
+        title="printbridge test page", pages=result.pages, printer=spec.name, source_kind="text",
+    )
+    if spec.is_mock:
+        print(f"  queued as {job_id} on the mock queue {spec.name} —")
+        print(f"    no paper moves; the PDF appears in {settings.mock_out_path} instead.")
+    else:
+        print(f"  queued as {job_id} on {spec.name}. A page should come out within a few seconds.")
+        print("    Nothing? The printer may be asleep — CUPS holds the job and prints it on wake.")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     from printbridge.admin import collect
 
@@ -391,6 +466,11 @@ def build_parser() -> argparse.ArgumentParser:
     rotate = keys_sub.add_parser("rotate")
     rotate.add_argument("person")
     keys.set_defaults(func=cmd_keys)
+
+    test_page = sub.add_parser("test-page", help="print one page to prove the whole path works")
+    test_page.add_argument("--printer")
+    test_page.add_argument("--dry-run", action="store_true", help="render and count, print nothing")
+    test_page.set_defaults(func=cmd_test_page)
 
     status = sub.add_parser("status", help="printers, who is connected, 24 h totals")
     status.set_defaults(func=cmd_status)
