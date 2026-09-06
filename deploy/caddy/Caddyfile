@@ -1,0 +1,36 @@
+# Standalone Caddy for hosts with nothing on 80/443 (EXPOSE=caddy, started by `--profile caddy`).
+# If a proxy already owns those ports, use deploy/caddy/printbridge.caddy instead — see
+# docs/topologies.md.
+#
+# Set your domain here (or use PUBLIC_URL's hostname); Caddy gets and renews the certificate.
+{$PUBLIC_HOSTNAME:localhost} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	handle /mcp* {
+		reverse_proxy printbridge:8000 {
+			header_up X-Forwarded-For {remote_host}
+			flush_interval -1
+		}
+	}
+
+	handle {
+		respond "printbridge is running. Connect through your assistant." 200
+	}
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri replace /mcp/REDACTED
+				request>headers>Authorization delete
+			}
+		}
+	}
+}

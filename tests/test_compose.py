@@ -80,4 +80,13 @@ def test_the_caddy_snippet_never_logs_the_connector_key():
 def test_the_caddy_snippet_only_proxies_mcp():
     snippet = (ROOT / "deploy" / "caddy" / "printbridge.caddy").read_text("utf-8")
     assert "reverse_proxy 127.0.0.1:8000" in snippet
-    assert "8001" not in snippet, "the admin port must never be reachable from the internet"
+    directives = [
+        line.split("#", 1)[0]
+        for line in snippet.splitlines()
+        if not line.strip().startswith("#")
+    ]
+    proxied = [line for line in directives if "reverse_proxy" in line]
+    assert proxied and all("8000" in line for line in proxied), (
+        "the admin port must never be reachable from the internet"
+    )
+    assert not any("8001" in line for line in directives)

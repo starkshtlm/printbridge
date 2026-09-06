@@ -1,0 +1,54 @@
+# printbridge — site snippet for a Caddy that already owns 80/443 on this host (EXPOSE=caddy-host).
+#
+# Install it as /etc/caddy/sites/printbridge.caddy on a host whose Caddyfile ends with
+#     import /etc/caddy/sites/*.caddy
+# then `caddy validate` and `systemctl reload caddy`. No existing site block is touched, and TLS is
+# automatic — Let's Encrypt, renewed by Caddy, with nothing to remember.
+#
+# Change print.example.com to your own hostname (it must already resolve to this server).
+print.example.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# The MCP endpoint. printbridge listens on loopback only; this is the single public door.
+	handle /mcp* {
+		reverse_proxy 127.0.0.1:8000 {
+			header_up X-Forwarded-For {remote_host}
+			flush_interval -1          # streamable HTTP: do not buffer the response
+		}
+	}
+
+	# Everything else is a page that leaks nothing. The admin port (8001) is deliberately absent:
+	# usage data says who printed what and when, and that never belongs on the internet.
+	handle {
+		respond "printbridge is running. Connect through your assistant." 200
+	}
+
+	log {
+		# stderr, i.e. the journal: `journalctl -u caddy`. Deliberately not a file — Caddy runs as
+		# the `caddy` user under a sandboxed unit, while `sudo caddy validate` runs as root and
+		# creates any log file it sees as root:root 0600. The next reload then fails with
+		# "permission denied" on a file the operator never created. journald also rotates for us.
+		#
+		# If you do want a file, create it first with the right owner:
+		#   sudo install -o caddy -g caddy -m 640 /dev/null /var/log/caddy/printbridge.log
+		# and replace the line below with:
+		#   output file /var/log/caddy/printbridge.log { roll_size 10mb roll_keep 5 }
+		output stderr
+
+		# The connector key lives in the path, so the path must never reach the log.
+		format filter {
+			wrap json
+			fields {
+				request>uri replace /mcp/REDACTED
+				request>headers>Authorization delete
+			}
+		}
+	}
+}

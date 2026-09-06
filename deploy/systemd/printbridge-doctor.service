@@ -1,0 +1,14 @@
+[Unit]
+Description=printbridge watchdog — doctor, alert on state change, weekly digest, retention
+Documentation=https://github.com/starkshtlm/printbridge/blob/main/docs/operations.md
+After=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Where you cloned printbridge. install.sh uses %h/printbridge.
+WorkingDirectory=%h/printbridge
+Environment=PRINTBRIDGE_DIR=%h/printbridge
+ExecStart=%h/printbridge/deploy/systemd/printbridge-watchdog.sh
+Nice=10
+TimeoutStartSec=180

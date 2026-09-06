@@ -1,0 +1,2 @@
+# Installed by scripts/02_sudoers_caddy.sh --apply. Three fixed commands, no wildcards, no shell.
+hermes ALL=(root) NOPASSWD: /usr/bin/install -m 644 -o root -g root /opt/stage/printbridge/printbridge.caddy /etc/caddy/sites/printbridge.caddy, /usr/bin/caddy validate --config /etc/caddy/Caddyfile, /usr/bin/systemctl reload caddy
