@@ -1,0 +1,115 @@
+/* printbridge print stylesheet — readable on paper, not on a screen.
+   The page size, header title and date are substituted by render.py before WeasyPrint sees this. */
+
+@page {
+  size: @PAGE_SIZE@;
+  margin: 20mm;
+
+  @top-left {
+    content: "@TITLE@";
+    font: 8pt/1.2 "DejaVu Sans", "Liberation Sans", sans-serif;
+    color: #555;
+    vertical-align: bottom;
+    padding-bottom: 3mm;
+    border-bottom: 0.4pt solid #bbb;
+    width: 100%;
+  }
+  @top-right {
+    content: "@DATE@";
+    font: 8pt/1.2 "DejaVu Sans", "Liberation Sans", sans-serif;
+    color: #555;
+    vertical-align: bottom;
+    padding-bottom: 3mm;
+    border-bottom: 0.4pt solid #bbb;
+  }
+  @bottom-center {
+    content: counter(page) " / " counter(pages);
+    font: 8pt "DejaVu Sans", "Liberation Sans", sans-serif;
+    color: #555;
+  }
+}
+
+html { font-size: 11pt; }
+
+body {
+  font-family: "DejaVu Serif", "Liberation Serif", Georgia, serif;
+  line-height: 1.45;
+  color: #111;
+  margin: 0;
+  hyphens: auto;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: "DejaVu Sans", "Liberation Sans", sans-serif;
+  line-height: 1.2;
+  page-break-after: avoid;
+  margin: 1.1em 0 0.45em;
+}
+h1 { font-size: 1.7rem; margin-top: 0; }
+h2 { font-size: 1.32rem; }
+h3 { font-size: 1.12rem; }
+h4, h5, h6 { font-size: 1rem; }
+
+p, ul, ol, dl { margin: 0 0 0.65em; orphans: 2; widows: 2; }
+li { margin-bottom: 0.2em; }
+li > p { margin-bottom: 0.3em; }
+
+a { color: #111; text-decoration: underline; }
+
+blockquote {
+  margin: 0.8em 0 0.8em 0;
+  padding-left: 4mm;
+  border-left: 1.2pt solid #999;
+  color: #333;
+}
+
+code, kbd, samp {
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+  font-size: 0.86em;
+}
+
+pre {
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+  font-size: 0.82em;
+  line-height: 1.35;
+  background: #f4f4f4;
+  border: 0.4pt solid #ddd;
+  padding: 2.5mm 3mm;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  page-break-inside: auto;
+}
+pre code { font-size: inherit; background: none; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.7em 0;
+  font-size: 0.94em;
+  page-break-inside: auto;
+}
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th, td {
+  border: 0.4pt solid #999;
+  padding: 1.4mm 2mm;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #eee; font-family: "DejaVu Sans", "Liberation Sans", sans-serif; }
+
+img { max-width: 100%; height: auto; }
+
+hr { border: none; border-top: 0.4pt solid #bbb; margin: 1.2em 0; }
+
+.pb-plain {
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  background: none;
+  border: none;
+  padding: 0;
+}
