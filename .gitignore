@@ -1,0 +1,28 @@
+# --- state and secrets: never committed ---
+.env
+data/
+spool/
+*.pem
+*.key
+
+# --- build-session state files (Swedish, local only) ---
+BUILD_LOG.md
+DANIEL_TODO.md
+MOCKS.md
+
+# --- python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- misc ---
+*.log
+.DS_Store

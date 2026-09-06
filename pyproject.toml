@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "printbridge"
+version = "0.9.0"
+description = "Self-hosted MCP print server: assistants print to a real printer over Tailscale, no print cloud."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "printbridge contributors" }]
+keywords = ["mcp", "printing", "cups", "tailscale", "fastmcp", "ipp"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Printing",
+]
+dependencies = [
+  "fastmcp>=4.0.0,<5",
+  "weasyprint>=66,<70",
+  "markdown-it-py>=3.0,<5",
+  "httpx>=0.27,<0.29",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "pypdf>=5.0,<7",
+  "bleach>=6.1,<7",
+  "starlette>=0.40",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+printbridge = "printbridge.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/starkshtlm/printbridge"
+Documentation = "https://github.com/starkshtlm/printbridge/blob/main/docs/SETUP.md"
+Issues = "https://github.com/starkshtlm/printbridge/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["printbridge"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["B008", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

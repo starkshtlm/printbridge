@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System dependencies (WeasyPrint + CUPS client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+            shared-mime-info fonts-dejavu-core cups-client
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check printbridge tests
+      - name: Pytest
+        run: pytest -q
+      - name: printbridge doctor (self-check only, no printer)
+        run: |
+          cp .env.example .env
+          printbridge doctor --self --quiet || true
+          printbridge doctor --self
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build printbridge image
+        run: docker build -t printbridge:ci .
+      - name: Build cups image
+        run: docker build -t printbridge-cups:ci ./cups
+      - name: Compose config is valid
+        run: |
+          cp .env.example .env
+          docker compose config >/dev/null
