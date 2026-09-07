@@ -5,6 +5,6 @@ and hands it to a CUPS queue that reaches the printer over a private route. Noth
 document leaves the operator's own infrastructure.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 __all__ = ["__version__"]
