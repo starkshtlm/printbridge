@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "printbridge"
-version = "0.9.0"
+version = "1.0.0"
 description = "Self-hosted MCP print server: assistants print to a real printer over Tailscale, no print cloud."
 readme = "README.md"
 license = { text = "MIT" }
