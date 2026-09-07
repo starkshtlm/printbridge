@@ -151,14 +151,55 @@ def test_the_watchdog_alerts_on_a_state_change_and_then_stays_quiet(runtime, mon
     from printbridge.doctor import Report, watchdog_tick
 
     bad = Report()
-    bad.add("queue home", "fail", "does not exist in CUPS", "docker compose restart cups")
+    bad.add("queue home", "fail", "does not exist in CUPS", "docker compose up -d cups")
     monkeypatch.setattr("printbridge.doctor.run_doctor", lambda rt, **kw: bad)
 
     _, first = watchdog_tick(runtime)
     _, second = watchdog_tick(runtime)
     assert first is True and second is False
     assert len(runtime.notifier.sent) == 1
-    assert "docker compose restart cups" in runtime.notifier.sent[0][1]
+    assert "docker compose up -d cups" in runtime.notifier.sent[0][1]
+
+
+def test_doctor_notices_when_nothing_is_watching(runtime):
+    """A watchdog that fails silently is worse than none; doctor is what makes it audible."""
+    from printbridge.doctor import run_doctor
+
+    report = run_doctor(runtime)
+    entry = next(c for c in report.checks if c.name == "watchdog")
+    assert entry.status == "warn" and "never run" in entry.detail
+    assert "deploy/systemd" in entry.fix
+
+
+def test_a_watchdog_tick_leaves_a_heartbeat(runtime):
+    from printbridge.doctor import run_doctor, watchdog_tick
+
+    watchdog_tick(runtime)
+    entry = next(c for c in run_doctor(runtime).checks if c.name == "watchdog")
+    assert entry.status == "ok" and "0 minute" in entry.detail
+
+
+def test_a_stale_heartbeat_is_reported_with_the_usual_cause(runtime):
+    from datetime import UTC, datetime, timedelta
+
+    from printbridge.doctor import run_doctor
+
+    stale = (datetime.now(UTC) - timedelta(hours=3)).isoformat(timespec="seconds")
+    runtime.store.set_meta("last_watchdog", stale)
+    entry = next(c for c in run_doctor(runtime).checks if c.name == "watchdog")
+    assert entry.status == "warn" and "180 minutes ago" in entry.detail
+    assert "User=" in entry.fix
+
+
+def test_the_shipped_unit_does_not_leave_the_user_to_chance():
+    unit = (ROOT / "deploy" / "systemd" / "printbridge-doctor.service").read_text("utf-8")
+    assert "User=__PRINTBRIDGE_USER__" in unit
+    directives = [ln for ln in unit.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert not any("%h" in ln for ln in directives), (
+        "%h in a system unit means /root, which is never the checkout"
+    )
+    readme = (ROOT / "deploy" / "systemd" / "README.md").read_text("utf-8")
+    assert "__PRINTBRIDGE_DIR__" in readme and "sed" in readme
 
 
 def test_cups_holds_jobs_for_a_sleeping_printer():

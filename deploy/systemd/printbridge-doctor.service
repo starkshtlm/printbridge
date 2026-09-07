@@ -6,9 +6,15 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Where you cloned printbridge. install.sh uses %h/printbridge.
-WorkingDirectory=%h/printbridge
-Environment=PRINTBRIDGE_DIR=%h/printbridge
-ExecStart=%h/printbridge/deploy/systemd/printbridge-watchdog.sh
+
+# Both lines must name the account that owns the checkout and may talk to Docker.
+# Without User=, a system unit runs as root and %h expands to /root — which is how the first
+# version of this file failed with status 203/EXEC every fifteen minutes. deploy/systemd/README.md
+# has a one-liner that fills both in for you.
+User=__PRINTBRIDGE_USER__
+WorkingDirectory=__PRINTBRIDGE_DIR__
+Environment=PRINTBRIDGE_DIR=__PRINTBRIDGE_DIR__
+ExecStart=__PRINTBRIDGE_DIR__/deploy/systemd/printbridge-watchdog.sh
+
 Nice=10
 TimeoutStartSec=180
