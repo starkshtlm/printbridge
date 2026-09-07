@@ -148,6 +148,22 @@ class Settings(BaseSettings):
     data_dir: Path = Field(Path("data"), alias="PRINTBRIDGE_DATA_DIR")
     spool_dir: Path | None = Field(None, alias="PRINTBRIDGE_SPOOL_DIR")
 
+    @field_validator(
+        "printers", "printer_uri", "public_url", "notify_webhook", "printer_name", mode="before"
+    )
+    @classmethod
+    def _drop_comment_values(cls, v: object) -> object:
+        """`KEY=            # explanation` leaves the comment as the value.
+
+        python-dotenv strips a trailing comment only when there is a value in front of it, so an
+        empty setting documented on the same line arrives as the documentation. It looked harmless
+        until `NOTIFY_WEBHOOK` became "# Telegram bot URL…" and every alert failed against it.
+        `.env.example` no longer writes them that way; this catches the operator who does.
+        """
+        if isinstance(v, str) and v.lstrip().startswith("#"):
+            return ""
+        return v
+
     @field_validator("expose", mode="before")
     @classmethod
     def _normalise_expose(cls, v: object) -> object:
@@ -196,6 +212,12 @@ class Settings(BaseSettings):
             raise ConfigError(
                 f"CONFIRM_ABOVE_PAGES ({self.confirm_above_pages}) is above MAX_PAGES "
                 f"({self.max_pages}); the confirmation would never be reachable."
+            )
+        if self.notify_webhook and not self.notify_webhook.startswith(("http://", "https://")):
+            raise ConfigError(
+                f"NOTIFY_WEBHOOK must be a URL starting with https:// — got "
+                f"{self.notify_webhook[:40]!r}. Leave it empty to write alerts to "
+                f"data/notify-outbox.jsonl instead."
             )
         if self.auth_mode in {"github", "google"}:
             raise ConfigError(

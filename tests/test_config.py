@@ -89,6 +89,41 @@ def test_bad_printer_config_says_what_is_wrong(raw, message):
         parse_printers(raw)
 
 
+@pytest.mark.parametrize(
+    "key,attribute",
+    [
+        ("NOTIFY_WEBHOOK", "notify_webhook"),
+        ("PRINTER_URI", "printer_uri"),
+        ("PUBLIC_URL", "public_url"),
+    ],
+)
+def test_an_empty_setting_documented_on_the_same_line_stays_empty(key, attribute, tmp_path):
+    """`KEY=            # explanation` used to arrive as the explanation.
+
+    python-dotenv only strips a trailing comment when a value precedes it, so an empty setting
+    documented inline became its own documentation — and NOTIFY_WEBHOOK then failed every alert
+    against a URL that read "# Telegram bot URL…".
+    """
+    env = tmp_path / ".env"
+    env.write_text(f"{key}=            # what this setting is for\nEXPOSE=none\n")
+    settings = load_settings(_env_file=str(env))
+    assert getattr(settings, attribute) == ""
+
+
+def test_the_shipped_example_parses_to_empty_where_it_looks_empty():
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parent.parent / ".env.example"
+    settings = load_settings(_env_file=str(example))
+    assert settings.notify_webhook == ""
+    assert settings.printer_uri == ""
+
+
+def test_a_webhook_that_is_not_a_url_is_refused():
+    with pytest.raises(ConfigError, match="must be a URL"):
+        load_settings(NOTIFY_WEBHOOK="telegram-bot-goes-here", EXPOSE="none")
+
+
 def test_runtime_warnings_name_the_risk(tmp_path):
     settings = load_settings(
         EXPOSE="none",

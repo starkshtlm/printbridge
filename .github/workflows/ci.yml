@@ -31,11 +31,34 @@ jobs:
         run: ruff check printbridge tests
       - name: Pytest
         run: pytest -q
-      - name: printbridge doctor (self-check only, no printer)
+      # `doctor --self` is the container healthcheck, so it must fail when there is no server and
+      # no key — which is exactly what a bare .env.example describes. Asserting "exit 0" against
+      # that was wrong, and it made this job red from the first push. Assert the real behaviour
+      # instead: the guard fires when it should, and doctor passes against a server that is up.
+      - name: A public endpoint with no keys must refuse to start
         run: |
           cp .env.example .env
-          printbridge doctor --self --quiet || true
+          chmod 600 .env
+          if printbridge doctor --self --quiet; then
+            echo "doctor accepted a published server with no connector keys" >&2
+            exit 1
+          fi
+          printbridge doctor --self | grep -q "no keys exist"
+
+      - name: doctor passes against a running server
+        run: |
+          sed -i 's|^EXPOSE=.*|EXPOSE=none|' .env
+          sed -i 's|^PRINTERS=.*|PRINTERS=home=cups-pdf:/|' .env
+          printbridge keys add ci --role admin > /dev/null
+          printbridge serve &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/healthz >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/healthz
           printbridge doctor --self
+          printbridge notify --test
+          kill %1
 
   docker-build:
     runs-on: ubuntu-latest
