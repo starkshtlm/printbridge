@@ -448,8 +448,37 @@ Nothing to maintain. A few things worth knowing:
 * **What did I print?** Ask your assistant *"what did I print today?"*, or run
   `docker compose exec printbridge printbridge status` from `~/printbridge`.
 * **Is it still working?** `docker compose exec printbridge printbridge test-page` prints one page.
-* **Get told when it breaks:** [operations.md](operations.md) sets up a 15-minute check that
-  messages you — on Telegram, say — the first time something changes for the worse.
+* **Running low on toner?** Ask your assistant *"is my printer low on toner?"* — it reads the
+  levels straight from the printer.
+
+### Getting told when something breaks (10 minutes, worth it)
+
+Printing can stop for reasons you will not notice for weeks: the printer's toner runs out, a router
+update breaks the connection home, a certificate lapses. printbridge can check every 15 minutes and
+send you one message the first time the answer changes — and nothing at all while everything is
+fine.
+
+The easiest place to receive it is Telegram:
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and follow it. You get a token.
+2. Message your new bot once, then open
+   `https://api.telegram.org/bot<token>/getUpdates` in a browser and copy the `chat_id` number.
+3. On the server:
+
+   ```bash
+   cd ~/printbridge
+   nano .env      # set: NOTIFY_WEBHOOK=https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
+   docker compose up -d printbridge
+   docker compose exec printbridge printbridge notify --test
+   ```
+   *What it does: tells printbridge where to reach you, restarts it so the change takes effect, and
+   sends one test message. `up -d`, not `restart` — `restart` would reuse the old settings.*
+
+   You should get a Telegram message within a second. If not, `printbridge doctor` says why.
+
+4. Then turn on the 15-minute check itself, following
+   [deploy/systemd/README.md](../deploy/systemd/README.md) — it is one paste, and `printbridge
+   doctor` tells you afterwards whether it is really running.
 
 ---
 

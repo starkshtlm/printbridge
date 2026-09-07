@@ -103,8 +103,9 @@ configuring anything. Revoking one person leaves everyone else alone.
 
 ## Status
 
-v0.9.0 — feature complete for v1.0, pending live verification with a physical printer and the
-three chat assistants. Grok is untested; the README will not claim it until it passes.
+v1.0.0 — verified end to end on 2026-09-07: a page out of a real printer from Claude.ai, from
+ChatGPT in developer mode, from Claude Code over a bearer token, and from an agent on the server
+itself. Grok is untested and this README will not claim it until somebody runs it.
 
 ## Licence
 

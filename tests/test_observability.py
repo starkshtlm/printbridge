@@ -69,6 +69,44 @@ def test_a_new_service_for_a_person_is_information_not_alarm(runtime):
     )
 
 
+def test_a_rotating_egress_address_is_not_a_new_origin(runtime):
+    """Claude Code leaves from a different address almost every request. That is not an intruder."""
+    runtime.store.touch_session(
+        session_id="s1", principal="daniel", client="claude-code", remote_ip="160.79.106.161"
+    )
+    same_provider = runtime.store.touch_session(
+        session_id="s2", principal="daniel", client="claude-code", remote_ip="160.79.106.175"
+    )
+    assert not same_provider.new_origin
+    assert not same_provider.new_client_for_principal
+
+
+def test_one_conversation_is_one_session_row_even_when_the_address_moves(runtime):
+    from printbridge.server import _stable_session_id
+
+    first = _stable_session_id("daniel", "claude-code", "160.79.106.161", "ua")
+    second = _stable_session_id("daniel", "claude-code", "160.79.106.175", "ua")
+    assert first == second
+
+
+def test_a_different_provider_is_still_a_new_origin(runtime):
+    runtime.store.touch_session(
+        session_id="s1", principal="daniel", client="claude-code", remote_ip="160.79.106.161"
+    )
+    elsewhere = runtime.store.touch_session(
+        session_id="s2", principal="daniel", client="grok", remote_ip="203.0.113.9"
+    )
+    assert elsewhere.new_origin
+
+
+def test_network_prefixes():
+    from printbridge.store import network_of
+
+    assert network_of("160.79.106.161") == network_of("160.79.106.175") == "160.79.106"
+    assert network_of("2001:db8:1234:5678::1") == "2001:db8:1234"
+    assert network_of("") == "" and network_of("-") == ""
+
+
 def test_a_new_service_from_a_new_network_is_the_someone_has_my_link_signal(runtime):
     runtime.store.touch_session(
         session_id="s1", principal="fanny", client="claude-ai", remote_ip="203.0.113.9"

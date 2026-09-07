@@ -49,6 +49,14 @@ pb jobs --since 30d --csv > printing.csv
 Columns: when, person, which assistant, pages, printer, status, title. **Titles, never content** —
 see [security.md](security.md#what-is-stored-and-what-is-not).
 
+The status is reconciled against CUPS before every read — by `jobs`, by `status`, by the
+`recent_jobs` tool, by `doctor` and by each watchdog tick — so a page that came out reads
+`completed` whether or not anyone asked about it. CUPS forgets finished jobs after a while and
+loses all of them when it restarts; a job that is gone from CUPS and older than 90 seconds is
+recorded as `completed`, because a job that left the queue and never reported a failure did print.
+That is the one inference printbridge makes about your paper, and it is why `dry-run` and
+`rejected` rows stay exactly as they were.
+
 ## Keys
 
 ```bash
@@ -78,6 +86,7 @@ queue: they are never replayed later.
 | `unknown_origin` | warning | a new assistant **and** a new network for that person — the "someone else has my link" signal |
 | `rate_limit` | warning | a key hit its hourly limit |
 | `cert_expiring` | warning | under 14 days |
+| `supply_low` | warning | toner or ink under 10 %, as the printer reports it over IPP |
 | `probe_404` | warning | 20+ requests an hour to connector links that do not exist |
 
 **One message per state change, and no repeats while the state holds.** An alarm that repeats
@@ -95,6 +104,10 @@ a notification the same afternoon.
 Install it from [../deploy/systemd/README.md](../deploy/systemd/README.md) — as a root unit, as a
 user unit if you cannot become root, or as a cron line. It also runs the weekly digest, deletes
 finished spool files and applies `JOB_LOG_RETENTION_DAYS`.
+
+Every tick leaves a heartbeat, and `printbridge doctor` reports it, so a watchdog that is installed
+but silently failing shows up as a finding rather than as nothing at all. Install **one** copy: a
+system unit or a user unit, never both.
 
 ## Updating
 
@@ -128,9 +141,12 @@ PRINTERS=home=ipp://192.168.1.50/ipp/print,office=ipp://192.168.1.60/ipp/print
 ```
 
 ```bash
-docker compose restart cups
+docker compose up -d cups
 pb doctor
 ```
+
+`up -d`, not `restart`: `restart` reuses the environment the container was created with, so an
+edit to `.env` would not reach it.
 
 The first entry is the default. Assistants can pass `printer="office"`, and a key can be restricted
 to one of them with `--printers`.

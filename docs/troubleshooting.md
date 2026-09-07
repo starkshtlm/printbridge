@@ -1,5 +1,10 @@
 # Troubleshooting
 
+> **`up -d`, not `restart`.** Every command below that follows an edit to `.env` uses
+> `docker compose up -d <service>`. `docker compose restart` restarts the *existing* container with
+> the environment it was created with, so your edit appears to do nothing — which costs an hour
+> before you suspect the command rather than the change.
+
 Start here, always:
 
 ```bash
@@ -50,7 +55,7 @@ Anyone with an account on the machine could otherwise read your settings.
 The file belongs to a different user than the process. In Docker this fixes itself:
 
 ```bash
-docker compose restart printbridge
+docker compose up -d printbridge
 ```
 
 The entrypoint adopts the owner of `data/` and repairs stragglers. On bare metal, `chown` the file
@@ -59,7 +64,7 @@ to the user printbridge runs as.
 ## `✗ spool writable`
 
 `data/` is not writable. Check the volume mount and the ownership of `./data`. In Docker,
-`docker compose restart printbridge` normally repairs it.
+`docker compose up -d printbridge` normally repairs it.
 
 ## `✗ connector keys` — no keys exist
 
@@ -114,7 +119,7 @@ see `✗ config` above; printbridge would rather not start than publish an unpro
 ## `✗ queue <name>` — does not exist in CUPS
 
 ```bash
-docker compose restart cups
+docker compose up -d cups
 docker compose logs cups --tail 20
 ```
 
@@ -181,7 +186,31 @@ failure mode at all.
 ## `! queue <name>` — MOCK (cups-pdf)
 
 Working as configured: printbridge is in mock mode and PDFs go to `data/mock-out`. Point `PRINTERS`
-at a real printer and `docker compose restart cups` when you have one.
+at a real printer and `docker compose up -d cups` when you have one.
+
+## `✓ job log` — what it is telling you
+
+Not a failure. Before every read of the print log — `recent_jobs`, `printbridge status`,
+`printbridge jobs`, `doctor` and each watchdog run — printbridge asks CUPS what actually happened
+to the jobs it still has down as open, and updates them. The line says how many rows it corrected
+and how many jobs are genuinely still in the queue.
+
+One thing to know: CUPS keeps finished jobs only for a while, and forgets all of them when the
+scheduler restarts. A job that is gone from CUPS and older than 90 seconds is recorded as
+`completed`, because a job that left the queue and was never reported failed did print. That is an
+inference, and it is the only one printbridge makes about your paper.
+
+## `! supplies <printer>` — toner or ink is low
+
+The printer reports its own levels over IPP; below 10 % printbridge says so, and — if
+`supply_low` is in `NOTIFY_EVENTS` — sends **one** message when it crosses the threshold and one
+more when a fresh cartridge brings it back. It never nags in between.
+
+Printing continues until the printer itself refuses. Order a replacement; nothing needs restarting
+when you fit it.
+
+`– supplies` instead means no configured printer reports levels over IPP, which is normal for
+mock queues and for some older printers.
 
 ## `✗ public URL` — does not resolve
 

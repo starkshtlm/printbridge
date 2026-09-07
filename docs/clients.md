@@ -13,17 +13,17 @@ printbridge keys add daniel --label agent   # a second key for his agents; still
 
 | Client | How | Verified |
 |---|---|---|
-| [Claude (web/desktop connector)](#claude-web-and-desktop) | paste `PUBLIC_URL/mcp/<key>`, no authentication | documented by Anthropic; **live check pending** |
-| [ChatGPT](#chatgpt-developer-mode) | developer mode → same URL, "No authentication" | documented; **live check pending** |
+| [Claude (web/desktop connector)](#claude-web-and-desktop) | paste `PUBLIC_URL/mcp/<key>`, no authentication | ✅ 2026-09-07 — authless, reports itself as `Anthropic/ClaudeAI` |
+| [ChatGPT](#chatgpt-developer-mode) | developer mode → same URL, "No authentication" | ✅ 2026-09-07 — reports itself as `openai-mcp (Codex)` |
 | [Grok](#grok) | connectors, same URL | **untested — no claim made** |
-| [Claude Code / Claude Desktop (config)](#claude-code-and-claude-desktop) | HTTP + `Authorization: Bearer <key>`, or stdio | ✅ verified |
-| [MCP Inspector](#mcp-inspector) | `npx @modelcontextprotocol/inspector --cli <url>` | ✅ verified 2026-09-06 |
-| [Agents on the same host](#agents-on-the-same-host) | `http://localhost:8000/mcp` + bearer | ✅ verified |
+| [Claude Code / Claude Desktop (config)](#claude-code-and-claude-desktop) | HTTP + `Authorization: Bearer <key>`, or stdio | ✅ 2026-09-07 |
+| [MCP Inspector](#mcp-inspector) | `npx @modelcontextprotocol/inspector --cli <url>` | ✅ 2026-09-06 |
+| [Agents on the same host](#agents-on-the-same-host) | `http://localhost:8000/mcp` + bearer | ✅ 2026-09-07 — printed on paper |
 | [Anything, over stdio](#stdio) | `python -m printbridge serve --transport stdio` | ✅ verified |
 
-> **Why "pending" and not "yes":** the endpoint has been proven with two independent MCP client
-> implementations over real HTTPS, but nobody has yet clicked through Claude.ai's and ChatGPT's own
-> connector UIs against this server. Those two rows get a date when somebody has.
+Verified means a page came out of a real printer through that client, not that the handshake
+worked. The name in the right-hand column is what the client calls itself in the MCP handshake, and
+therefore what you will see in `printbridge status` and `printbridge jobs`.
 
 ---
 
@@ -37,8 +37,8 @@ registration; they cannot send a custom header. That is exactly why printbridge 
 path — see [security.md](security.md#why-the-key-is-in-the-url).
 
 *Known wrinkle:* one report describes an organisation-admin connector UI without a "no
-authentication" option. On a personal account the option is there. If yours is missing it, use
-Claude Desktop's config file instead (below), which can send a header.
+authentication" option. On a personal account the option is there — verified 2026-09-07. If yours
+is missing it, use Claude Desktop's config file instead (below), which can send a header.
 
 ## ChatGPT (developer mode)
 
@@ -47,9 +47,10 @@ authentication**. Plus or Pro plan required.
 
 ## Grok
 
-Grok's support for remote MCP connectors is not confirmed in documentation we can point at. Try the
-same URL; if it works, please open an issue and this table gets a ✅ and a date. Until then this
-project does not claim Grok support.
+Grok's support for remote MCP connectors is not confirmed in documentation we can point at, and
+nobody has run it against this server. Try the same URL; if it works, please open an issue and the
+table above gets a ✅ and a date. Until then this project makes no claim about Grok — including in
+the README.
 
 ## Claude Code and Claude Desktop
 
@@ -144,7 +145,7 @@ request scope, so whatever the hub puts there is what the job log records.
 | `list_printers` | "which printers do I have?" |
 | `printer_status` | "why didn't it print?" |
 | `get_job` / `cancel_job` | following up on a specific job |
-| `recent_jobs` | "what did I print today?" — your own jobs only, unless your key is an admin key |
+| `recent_jobs` | "what did I print today?" — your own jobs only, unless your key is an admin key. The status is reconciled against CUPS first, so a job that printed reads `completed` even if nobody asked about it |
 
 Every tool takes `dry_run=true` (render and count, print nothing) and, above
 `CONFIRM_ABOVE_PAGES`, requires `confirmed=true`.

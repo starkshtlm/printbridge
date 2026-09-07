@@ -76,14 +76,19 @@ def test_the_guide_has_a_get_help_section_asking_for_doctor_output():
     assert "printbridge doctor" in SETUP.split("If you get stuck")[1]
 
 
-def test_no_daniel_specific_values_leak_into_the_repository():
-    """Generic: the operator's own values live in .env, not in the code or the docs."""
+def test_no_daniel_specific_values_leak_into_what_ships():
+    """Generic: the operator's own values live in .env, not in the code or the docs.
+
+    Scope is what ships and what a reader is told to copy. Test *fixtures* may name a real printer,
+    because a captured IPP response is worth more than an invented one — and the rule says "except
+    as examples".
+    """
     forbidden = ("houseofstark", "hermes", "canon", "lbp673")
     offenders = []
     for path in ROOT.rglob("*"):
         if not path.is_file() or ".venv" in path.parts or ".git" in path.parts:
             continue
-        if path.name == "test_docs.py":  # this file has to name the words it forbids
+        if "tests" in path.parts:  # fixtures are examples by definition; see the docstring
             continue
         if path.suffix not in {".py", ".md", ".yml", ".yaml", ".toml", ".sh", ".caddy", ".conf"}:
             continue
