@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 JOB_ID_RE = re.compile(r"request id is (\S+)")
@@ -161,6 +162,14 @@ class Spooler:
             return False
         raise SpoolError(_friendly_cups_error(["cancel", job_id], proc))
 
+    def job_states(self) -> dict[str, JobInfo]:
+        """Every job CUPS still knows about, in two calls rather than one call per job."""
+        states: dict[str, JobInfo] = {}
+        for window in ("completed", "not-completed"):
+            proc = self._run(["lpstat", "-W", window, "-l", "-o"], check=False)
+            states.update(parse_lpstat_jobs(proc.stdout or "", window))
+        return states
+
     def queue_depth(self, printer: str | None = None) -> int:
         proc = self._run(["lpstat", "-W", "not-completed", "-o"], check=False)
         lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
@@ -188,6 +197,65 @@ class Spooler:
         except SpoolError:
             return {}
         return parse_ipptool(proc.stdout or "")
+
+
+def parse_lpstat_jobs(listing: str, window: str) -> dict[str, JobInfo]:
+    """Parse a whole `lpstat -W <window> -l -o` listing into {job_id: JobInfo}.
+
+    One call gives every job's state, which is what makes reconciling the job log cheap enough to
+    do on every read. Written against real CUPS 2.4 output:
+
+        home-1                  unknown          14336   Mon Sep  7 09:53:06 2026
+            Status:
+            Alerts: processing-to-stop-point
+            queued for home
+
+    The `-W` window is the authoritative signal for "has it left the queue"; the Alerts line only
+    refines *how* it left (cancelled, aborted).
+    """
+    jobs: dict[str, JobInfo] = {}
+    current: JobInfo | None = None
+    for raw in listing.splitlines():
+        if not raw.strip():
+            continue
+        if raw[0].isspace():  # continuation line for the job above
+            if current is None:
+                continue
+            low = raw.strip().lower()
+            if low.startswith(("status:", "alerts:")):
+                detail = low.split(":", 1)[1].strip()
+                if "cancel" in detail:
+                    current.state = "cancelled"
+                elif "abort" in detail:
+                    current.state = "failed"
+                elif "job-printing" in detail or "processing" in detail and window != "completed":
+                    current.state = "printing"
+                elif detail and "job-" not in detail and window != "completed":
+                    current.reason = raw.strip().split(":", 1)[1].strip()
+            continue
+        parts = raw.split()
+        if len(parts) < 2 or "-" not in parts[0]:
+            continue
+        job_id = parts[0]
+        current = JobInfo(
+            job_id=job_id,
+            state="completed" if window == "completed" else "queued",
+            printer=job_id.rsplit("-", 1)[0],
+            size=parts[2] if len(parts) > 2 else "",
+            submitted=" ".join(parts[3:]) if len(parts) > 3 else "",
+        )
+        jobs[job_id] = current
+    return jobs
+
+
+def parse_lpstat_submitted(value: str) -> datetime | None:
+    """CUPS prints `Mon Sep  7 09:53:06 2026` in the C locale. Unparsable is not an error."""
+    for fmt in ("%a %b %d %H:%M:%S %Y", "%a %d %b %Y %I:%M:%S %p %Z"):
+        try:
+            return datetime.strptime(" ".join(value.split()), fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
 
 
 def _find_job(listing: str, job_id: str) -> JobInfo | None:
@@ -261,6 +329,9 @@ def parse_ipptool(text: str) -> dict[str, str]:
         "printer-is-accepting-jobs",
         "marker-levels",
         "marker-names",
+        "marker-high-levels",
+        "marker-low-levels",
+        "marker-types",
         "printer-state-reasons",
     }
     out: dict[str, str] = {}
@@ -275,6 +346,69 @@ def parse_ipptool(text: str) -> dict[str, str]:
                 if value:
                     out.setdefault(key, value)
     return out
+
+
+SUPPLY_LOW_PERCENT = 10
+
+
+@dataclass(frozen=True)
+class Supply:
+    """One consumable, as the printer reports it over IPP."""
+
+    name: str
+    level: int          # already normalised to a percentage of its own high level
+    kind: str = ""      # toner | ink | waste-toner | …
+    low_at: int = SUPPLY_LOW_PERCENT
+
+    @property
+    def is_low(self) -> bool:
+        return self.level >= 0 and self.level <= max(self.low_at, SUPPLY_LOW_PERCENT)
+
+    def describe(self) -> str:
+        return f"{self.name} {self.level}%"
+
+
+def parse_supplies(attrs: dict[str, str]) -> list[Supply]:
+    """`marker-names` + `marker-levels` (+ high/low levels) → a list we can alert on.
+
+    Levels are reported against `marker-high-levels`, which is not always 100, so normalise before
+    comparing with a percentage threshold. A waste container counts *up*, so it is skipped rather
+    than reported as permanently full.
+    """
+
+    def split(key: str) -> list[str]:
+        raw = attrs.get(key, "")
+        return [part.strip() for part in raw.split(",")] if raw else []
+
+    names = split("marker-names")
+    levels = split("marker-levels")
+    highs = split("marker-high-levels")
+    lows = split("marker-low-levels")
+    kinds = split("marker-types")
+
+    supplies: list[Supply] = []
+    for index, name in enumerate(names):
+        try:
+            level = int(levels[index])
+        except (IndexError, ValueError):
+            continue
+        if level < 0:  # -1/-2 mean "unknown" or "unavailable" in IPP
+            continue
+        try:
+            high = int(highs[index])
+        except (IndexError, ValueError):
+            high = 100
+        if high > 0 and high != 100:
+            level = round(level * 100 / high)
+        kind = kinds[index] if index < len(kinds) else ""
+        if "waste" in kind.lower() or "waste" in name.lower():
+            continue  # counts upwards; "low" is meaningless
+        try:
+            low_at = int(lows[index])
+        except (IndexError, ValueError):
+            low_at = SUPPLY_LOW_PERCENT
+        supplies.append(Supply(name=name, level=level, kind=kind, low_at=low_at))
+    return supplies
 
 
 def _friendly_cups_error(args: list[str], proc: subprocess.CompletedProcess[str]) -> str:

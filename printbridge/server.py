@@ -37,10 +37,11 @@ from printbridge.auth import (
     resolve_principal,
 )
 from printbridge.config import ConfigError, Settings
+from printbridge.reconcile import reconcile_quietly
 from printbridge.render import RenderError, pdf_page_count, render_to_pdf
 from printbridge.runtime import Runtime, build_runtime
 from printbridge.server_helpers import spool_target as _spool_target
-from printbridge.spool import PrintOptions, SpoolError
+from printbridge.spool import PrintOptions, SpoolError, parse_supplies
 
 SERVER_INSTRUCTIONS = """\
 printbridge prints on the user's own physical printer at home or in their office.
@@ -116,8 +117,9 @@ class SessionMiddleware(Middleware):
                 elif signal.new_client_for_principal:
                     notifier.on_state(
                         "new_client",
-                        f"{caller.principal.name}:{caller.client}",
+                        "seen",
                         f"{caller.principal.name} connected a new assistant: {caller.client}.",
+                        key=f"new_client:{caller.principal.name}:{caller.client}",
                     )
         except Exception:  # noqa: BLE001 - bookkeeping must never break a call
             pass
@@ -230,10 +232,11 @@ def _guard_rate(runtime: Runtime, caller: CallerInfo) -> None:
         if runtime.notifier is not None:
             runtime.notifier.on_state(
                 "rate_limit",
-                f"{principal.name}:hit",
+                "hit",
                 f"{principal.name} hit the rate limit ({limit} jobs/hour) from {caller.client}. "
                 f"Raise it with `printbridge keys rotate {principal.name} --rate N/h` if that is "
                 f"normal for them.",
+                key=f"rate_limit:{principal.name}",
             )
         raise ToolError(
             f"Rate limit reached: {limit} print jobs per hour for this key. Try again in about "
@@ -297,9 +300,10 @@ def _submit(
         if runtime.notifier is not None:
             runtime.notifier.on_state(
                 "printer_offline",
-                f"{printer}:down",
+                "down",
                 f"Printing to {printer} failed: {exc} "
                 f"See docs/troubleshooting.md — start with `printbridge doctor`.",
+                key=f"printer_offline:{printer}",
             )
         raise ToolError(str(exc)) from exc
 
@@ -309,7 +313,9 @@ def _submit(
     )
     runtime.store.count_session_job(caller.session_id)
     if runtime.notifier is not None:
-        runtime.notifier.on_state("printer_offline", f"{printer}:up", f"{printer} is printing again.")
+        runtime.notifier.on_state(
+            "printer_offline", "up", f"{printer} is printing again.", key=f"printer_offline:{printer}"
+        )
     if runtime.settings.keep_spool_hours == 0:
         try:
             pdf_path.unlink(missing_ok=True)
@@ -655,11 +661,9 @@ def build_server(settings: Settings, runtime: Runtime | None = None) -> FastMCP:
         attrs = rt.spooler.printer_attributes(spec.uri) if not spec.is_mock else {}
         errors = [e for e in rt.store.last_errors(3) if e["printer"] == queue]
         online = bool(info and info.state in {"idle", "processing"})
-        supplies = {}
-        if attrs.get("marker-names") and attrs.get("marker-levels"):
-            names = [n.strip().strip('"') for n in attrs["marker-names"].split(",")]
-            levels = [v.strip() for v in attrs["marker-levels"].split(",")]
-            supplies = dict(zip(names, levels, strict=False))
+        parsed = parse_supplies(attrs)
+        supplies = {s.name: f"{s.level}%" for s in parsed}
+        low = [s for s in parsed if s.is_low]
         return {
             "printer": queue,
             "online": online,
@@ -670,9 +674,15 @@ def build_server(settings: Settings, runtime: Runtime | None = None) -> FastMCP:
             "model": attrs.get("printer-make-and-model", ""),
             "supplies": supplies,
             "last_error": errors[0]["error"] if errors else "",
+            "supplies_low": [s.name for s in low],
             "message": (
                 f"{queue} is {'online' if online else 'not reachable'}"
                 f"{f', {depth} job(s) waiting' if depth else ''}."
+                + (
+                    " Running low: " + ", ".join(f"{s.name} at {s.level}%" for s in low) + "."
+                    if low
+                    else ""
+                )
                 + (" Mock queue (cups-pdf) — no paper moves." if spec.is_mock else "")
             ),
         }
@@ -691,6 +701,7 @@ def build_server(settings: Settings, runtime: Runtime | None = None) -> FastMCP:
     ) -> dict[str, Any]:
         caller = caller_of(ctx)
         limit = max(1, min(int(limit or 10), 100))
+        reconcile_quietly(rt)  # ISS-0122: report what CUPS did, not what we hoped at submission
         rows = rt.store.recent_jobs(
             principal=None if caller.principal.is_admin else caller.principal.name,
             printer=printer,
@@ -733,7 +744,14 @@ def _looks_generated(session_id: str) -> bool:
 
 
 def _stable_session_id(principal: str, client: str, remote_ip: str, user_agent: str) -> str:
-    digest = sha256(f"{principal}|{client}|{remote_ip}|{user_agent}".encode()).hexdigest()
+    """A fallback id for transports that give us no session.
+
+    Deliberately *not* keyed on the address: Claude Code and other hosted clients leave from a
+    different egress IP on nearly every request, which would turn one conversation into a dozen
+    rows in `printbridge status`. The address is still recorded on the row, it just does not define
+    identity.
+    """
+    digest = sha256(f"{principal}|{client}|{user_agent}".encode()).hexdigest()
     return f"pb-{digest[:20]}"
 
 

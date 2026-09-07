@@ -289,10 +289,34 @@ def cmd_test_page(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Send one message so you find out here, not during an outage, whether alerts work."""
+    runtime = _runtime(args)
+    notifier = runtime.notifier
+    if notifier is None:
+        print("  ✗ notifications are not configured at all.", file=sys.stderr)
+        return 1
+    print(f"  target: {notifier.describe()}")
+    delivered = notifier.send(
+        "test", "test message — if you can read this, printbridge can reach you."
+    )
+    if delivered:
+        print("  ✓ delivered.")
+        return 0
+    failure = notifier.last_delivery_error()
+    if notifier.configured:
+        print(f"  ✗ not delivered; written to the outbox instead. {failure}", file=sys.stderr)
+        return 1
+    print(f"  written to {runtime.settings.outbox_path} (no webhook configured).")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     from printbridge.admin import collect
+    from printbridge.reconcile import reconcile_quietly
 
     runtime = _runtime(args)
+    reconcile_quietly(runtime)
     data = collect(runtime)
     print(f"printbridge {data['version']} — {datetime.now():%Y-%m-%d %H:%M}")
     print()
@@ -331,7 +355,10 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
+    from printbridge.reconcile import reconcile_quietly
+
     runtime = _runtime(args)
+    reconcile_quietly(runtime)
     rows = runtime.store.recent_jobs(
         principal=args.principal, printer=args.printer, limit=args.limit, since=_parse_since(args.since)
     )
@@ -471,6 +498,10 @@ def build_parser() -> argparse.ArgumentParser:
     test_page.add_argument("--printer")
     test_page.add_argument("--dry-run", action="store_true", help="render and count, print nothing")
     test_page.set_defaults(func=cmd_test_page)
+
+    notify = sub.add_parser("notify", help="send a test alert and report whether it arrived")
+    notify.add_argument("--test", action="store_true", default=True)
+    notify.set_defaults(func=cmd_notify)
 
     status = sub.add_parser("status", help="printers, who is connected, 24 h totals")
     status.set_defaults(func=cmd_status)

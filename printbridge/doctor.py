@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 from printbridge import __version__
 from printbridge.config import ConfigError, Settings, validate_runtime
 from printbridge.runtime import Runtime
+from printbridge.store import utcnow
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 _MARK = {OK: "✓", WARN: "!", FAIL: "✗", SKIP: "–"}
@@ -122,10 +123,13 @@ def run_doctor(
 
     _check_cups(report, runtime)
     _check_queues(report, runtime)
+    _check_job_log(report, runtime)
+    _check_supplies(report, runtime)
     _check_public_url(report, settings)
     _check_tls(report, settings)
     _check_tailscale(report)
     _check_notify(report, runtime)
+    _check_watchdog(report, runtime)
     _check_version(report)
     return report
 
@@ -187,7 +191,7 @@ def _check_files(report: Report, settings: Settings, runtime: Runtime) -> None:
             "keys.json permissions",
             FAIL,
             f"{settings.keys_path} exists but this process cannot read it (owned by another user)",
-            "In Docker this fixes itself on restart (`docker compose restart printbridge`); "
+            "In Docker this fixes itself on restart (`docker compose up -d printbridge`); "
             "bare metal: chown the file to the user printbridge runs as.",
         )
     else:
@@ -286,7 +290,7 @@ def _check_queues(report: Report, runtime: Runtime) -> None:
                 f"queue {spec.name}",
                 FAIL,
                 "does not exist in CUPS",
-                "`docker compose restart cups` recreates every queue in PRINTERS; the cups log says "
+                "`docker compose up -d cups` recreates every queue in PRINTERS; the cups log says "
                 "why it could not.",
             )
             continue
@@ -295,7 +299,7 @@ def _check_queues(report: Report, runtime: Runtime) -> None:
                 f"queue {spec.name}",
                 WARN,
                 f"MOCK (cups-pdf) — PDFs land in {settings.mock_out_path}, no paper moves",
-                "Set a real printer in PRINTERS and `docker compose restart cups` when the printer "
+                "Set a real printer in PRINTERS and `docker compose up -d cups` when the printer "
                 "is reachable.",
             )
             continue
@@ -339,6 +343,56 @@ def _check_queues(report: Report, runtime: Runtime) -> None:
                 "Add a PPD: PRINTERS=…;driver=<model>. `lpinfo -m | grep -i <make>` inside the cups "
                 "container lists candidates (Gutenprint and HPLIP are installed).",
             )
+
+
+def _check_job_log(report: Report, runtime: Runtime) -> None:
+    """Reconcile the log against CUPS and say so — ISS-0122 was invisible until it was reported."""
+    from printbridge.reconcile import reconcile_jobs
+
+    updated = reconcile_jobs(runtime)
+    still_open = len(runtime.store.open_jobs())
+    detail = f"{updated} row(s) reconciled with CUPS" if updated else "in step with CUPS"
+    if still_open:
+        detail += f" · {still_open} job(s) still in the queue"
+    report.add("job log", OK, detail)
+
+
+def collect_supplies(runtime: Runtime) -> dict[str, list]:
+    """{queue: [Supply, …]} for every real printer that reports marker levels over IPP."""
+    from printbridge.spool import parse_supplies
+
+    out: dict[str, list] = {}
+    for spec in runtime.settings.printer_specs:
+        if spec.is_mock:
+            continue
+        try:
+            attrs = runtime.spooler.printer_attributes(spec.uri)
+        except Exception:  # noqa: BLE001 - a sleeping printer is not a doctor crash
+            continue
+        supplies = parse_supplies(attrs)
+        if supplies:
+            out[spec.name] = supplies
+    return out
+
+
+def _check_supplies(report: Report, runtime: Runtime) -> None:
+    supplies = collect_supplies(runtime)
+    if not supplies:
+        report.add("supplies", SKIP, "no printer reports toner or ink levels over IPP")
+        return
+    for queue, items in supplies.items():
+        low = [s for s in items if s.is_low]
+        summary = ", ".join(s.describe() for s in items)
+        if low:
+            report.add(
+                f"supplies {queue}",
+                WARN,
+                summary,
+                f"{' and '.join(s.name for s in low)} will run out soon — order a replacement. "
+                "printbridge keeps printing until the printer itself refuses.",
+            )
+        else:
+            report.add(f"supplies {queue}", OK, summary)
 
 
 def _check_public_url(report: Report, settings: Settings) -> None:
@@ -454,8 +508,25 @@ def _check_notify(report: Report, runtime: Runtime) -> None:
     if notifier is None:
         report.add("notifications", SKIP, "not configured")
         return
-    if notifier.configured:
-        report.add("notifications", OK, f"webhook OK ({notifier.describe()})")
+    if getattr(notifier, "is_placeholder", False):
+        report.add(
+            "notifications",
+            FAIL,
+            "NOTIFY_WEBHOOK is still a placeholder — every alert goes to the outbox instead",
+            "Put the real bot URL in .env (no angle brackets left in it) and "
+            "`docker compose up -d printbridge`.",
+        )
+    elif notifier.configured:
+        failure = notifier.last_delivery_error() if hasattr(notifier, "last_delivery_error") else ""
+        if failure:
+            report.add(
+                "notifications",
+                WARN,
+                f"webhook configured, but the last alert did not get through — {failure}",
+                "Check the bot token and chat id, then `printbridge notify --test`.",
+            )
+        else:
+            report.add("notifications", OK, f"webhook OK ({notifier.describe()})")
     else:
         report.add(
             "notifications",
@@ -463,6 +534,44 @@ def _check_notify(report: Report, runtime: Runtime) -> None:
             f"outbox only — alerts are written to {runtime.settings.outbox_path}",
             "Set NOTIFY_WEBHOOK in .env (a Telegram bot URL works) to get alerts on your phone.",
         )
+
+
+WATCHDOG_STALE_MINUTES = 45
+
+
+def _check_watchdog(report: Report, runtime: Runtime) -> None:
+    """Is anything actually checking on this server, or does it only get checked when you ask?
+
+    The watchdog writes a heartbeat on every tick, so this works from inside the container and
+    catches every way a timer can be broken — wrong unit, disabled timer, no Docker access. The
+    first version of the shipped unit failed with status 203/EXEC every fifteen minutes and nothing
+    said so; that is what this check exists to prevent.
+    """
+    last = runtime.store.get_meta("last_watchdog", "")
+    install = (
+        "Install it: deploy/systemd/README.md (one sed, two installs). Without it, nothing tells "
+        "you when the printer disappears."
+    )
+    if not last:
+        report.add("watchdog", WARN, "has never run", install)
+        return
+    try:
+        when = datetime.fromisoformat(last)
+    except ValueError:
+        report.add("watchdog", WARN, f"unreadable heartbeat {last!r}", install)
+        return
+    minutes = (datetime.now(UTC) - when).total_seconds() / 60
+    if minutes > WATCHDOG_STALE_MINUTES:
+        report.add(
+            "watchdog",
+            WARN,
+            f"last ran {int(minutes)} minutes ago ({last[:16].replace('T', ' ')})",
+            "The timer is not firing, or it fires and fails. Check "
+            "`systemctl status printbridge-doctor.service` — a system unit needs `User=` or it runs "
+            "as root, looks for the checkout in /root and fails 203/EXEC every tick.",
+        )
+    else:
+        report.add("watchdog", OK, f"last ran {int(minutes)} minute(s) ago")
 
 
 def _check_version(report: Report) -> None:
@@ -515,7 +624,9 @@ def _my_public_addresses() -> set[str]:
 
 def watchdog_tick(runtime: Runtime) -> tuple[Report, bool]:
     """One watchdog run: doctor, alert on a *state change*, return (report, alerted)."""
+    runtime.store.set_meta("last_watchdog", utcnow())
     report = run_doctor(runtime)
+    _alert_on_supplies(runtime)
     signature = report.state_signature()
     previous = runtime.store.get_meta("doctor_signature", "")
     alerted = False
@@ -533,6 +644,35 @@ def watchdog_tick(runtime: Runtime) -> tuple[Report, bool]:
             runtime.notifier.send("printer_online", "doctor: everything is green again.")
             alerted = True
     return report, alerted
+
+
+def _alert_on_supplies(runtime: Runtime) -> None:
+    """One message when a consumable goes low, one when it is replaced — never in between.
+
+    The state is bucketed (`low`/`ok` plus the name), so a cartridge sliding from 5 % to 4 % does
+    not produce a second message. Crossing back above the threshold does.
+    """
+    notifier = runtime.notifier
+    if notifier is None:
+        return
+    for queue, items in collect_supplies(runtime).items():
+        low = [s for s in items if s.is_low]
+        if low:
+            notifier.on_state(
+                "supply_low",
+                "low:" + ",".join(sorted(s.name for s in low)),
+                f"{queue}: "
+                + ", ".join(f"{s.name} is at {s.level}%" for s in low)
+                + ". Order a replacement — printing continues until the printer itself refuses.",
+                key=f"supply_low:{queue}",
+            )
+        else:
+            notifier.on_state(
+                "supply_low",
+                "ok",
+                f"{queue}: toner and ink are back above the threshold.",
+                key=f"supply_low:{queue}",
+            )
 
 
 def collect_for_status(runtime: Runtime) -> dict[str, Any]:

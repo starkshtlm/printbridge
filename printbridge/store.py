@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     client       TEXT DEFAULT 'unknown',
     client_version TEXT DEFAULT '',
     remote_ip    TEXT DEFAULT '',
+    remote_net   TEXT DEFAULT '',
     user_agent   TEXT DEFAULT '',
     first_seen   TEXT NOT NULL,
     last_seen    TEXT NOT NULL,
@@ -70,6 +71,23 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 """
+
+
+def network_of(address: str) -> str:
+    """The network an address belongs to, for "have we seen this person from here before?".
+
+    Comparing whole addresses sounds stricter and is in fact worse: a cloud-hosted assistant leaves
+    from a different egress address on almost every request, so an exact match would raise the
+    "someone else has my link" warning several times an hour and teach the operator to ignore it.
+    A /24 (or /48 for IPv6) still distinguishes a different provider or a different continent.
+    """
+    address = (address or "").strip()
+    if not address or address == "-":
+        return ""
+    if ":" in address:  # IPv6 → first three hextets, i.e. the /48
+        return ":".join(address.split(":")[:3])
+    parts = address.split(".")
+    return ".".join(parts[:3]) if len(parts) == 4 else address
 
 
 def utcnow() -> str:
@@ -98,7 +116,19 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
+            self._migrate()
             self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns that later versions introduced. SQLite has no IF NOT EXISTS for columns."""
+        have = {row["name"] for row in self._db.execute("PRAGMA table_info(sessions)")}
+        if "remote_net" not in have:
+            self._db.execute("ALTER TABLE sessions ADD COLUMN remote_net TEXT DEFAULT ''")
+            self._db.execute(
+                "UPDATE sessions SET remote_net = "
+                "substr(remote_ip, 1, length(remote_ip) - length(replace(remote_ip, '.', '')) "
+                "+ instr(remote_ip, '.')) WHERE remote_ip LIKE '%.%.%.%'"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -200,6 +230,16 @@ class Store:
             rows = self._db.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
+    def open_jobs(self, limit: int = 500) -> list[dict[str, Any]]:
+        """Rows that claim to be still in the queue — what reconciliation has to check."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM jobs WHERE status IN ('queued','printing') AND job_id IS NOT NULL "
+                "ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def count_jobs_since(self, principal: str, since: datetime) -> int:
         with self._lock:
             row = self._db.execute(
@@ -252,20 +292,23 @@ class Store:
                 "SELECT 1 FROM sessions WHERE principal = ? AND client = ? LIMIT 1",
                 (principal, client),
             ).fetchone()
+            network = network_of(remote_ip)
             seen_origin = self._db.execute(
-                "SELECT 1 FROM sessions WHERE principal = ? AND remote_ip = ? LIMIT 1",
-                (principal, remote_ip),
+                "SELECT 1 FROM sessions WHERE principal = ? AND remote_net = ? LIMIT 1",
+                (principal, network),
             ).fetchone()
             if existing:
                 self._db.execute(
                     "UPDATE sessions SET last_seen = ?, calls = calls + ?, client = ?, "
-                    "client_version = ?, remote_ip = ?, user_agent = ? WHERE session_id = ?",
+                    "client_version = ?, remote_ip = ?, remote_net = ?, user_agent = ? "
+                    "WHERE session_id = ?",
                     (
                         now,
                         1 if counts_call else 0,
                         client or existing["client"],
                         client_version or existing["client_version"],
                         remote_ip or existing["remote_ip"],
+                        network or existing["remote_net"],
                         user_agent or existing["user_agent"],
                         session_id,
                     ),
@@ -273,14 +316,16 @@ class Store:
             else:
                 self._db.execute(
                     """INSERT INTO sessions (session_id, principal, client, client_version,
-                                             remote_ip, user_agent, first_seen, last_seen, calls, jobs)
-                       VALUES (?,?,?,?,?,?,?,?,?,0)""",
+                                             remote_ip, remote_net, user_agent, first_seen,
+                                             last_seen, calls, jobs)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
                     (
                         session_id,
                         principal,
                         client,
                         client_version,
                         remote_ip,
+                        network,
                         user_agent,
                         now,
                         now,

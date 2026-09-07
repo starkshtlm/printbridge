@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,8 @@ class FakeSpooler(Spooler):
         super().__init__(cups_server="fake:631")
         self.calls: list[list[str]] = []
         self.next_job = 1
+        self.finished: dict[str, str] = {}
+        self.attrs: dict[str, str] | None = None
         self.fail_with: str | None = None
         self.queues_text = (
             "printer home is idle.  enabled since Sat 06 Sep 2026 10:00:00 PM CEST\n"
@@ -37,6 +40,10 @@ class FakeSpooler(Spooler):
             "\tReasons: none\n"
             "system default destination: home\n"
         )
+
+    def finish(self, job_id: str, state: str = "completed") -> None:
+        """Pretend CUPS printed (or cancelled, or aborted) a job we submitted."""
+        self.finished[job_id] = state
 
     def _run(self, args: list[str], *, check: bool = True):  # type: ignore[override]
         self.calls.append(list(args))
@@ -55,7 +62,25 @@ class FakeSpooler(Spooler):
             elif "-p" in args:
                 stdout = self.queues_text
             elif "-o" in args:
-                stdout = ""
+                window = args[args.index("-W") + 1] if "-W" in args else "not-completed"
+                wanted = {
+                    "completed": lambda st: st in {"completed", "cancelled", "failed"},
+                    "not-completed": lambda st: st in {"queued", "printing"},
+                    "all": lambda st: True,
+                }[window]
+                rows = []
+                for job_id, state in self.finished.items():
+                    if not wanted(state):
+                        continue
+                    stamp = datetime.now(UTC).strftime("%a %b %e %H:%M:%S %Y")
+                    rows.append(f"{job_id}   daniel   9000   {stamp}")
+                    if state == "cancelled":
+                        rows.append("\tAlerts: job-canceled-by-user")
+                    elif state == "failed":
+                        rows.append("\tAlerts: job-aborted-by-system")
+                    elif state == "printing":
+                        rows.append("\tAlerts: job-printing")
+                stdout = "\n".join(rows) + ("\n" if rows else "")
         elif args[0] == "cancel":
             stdout = ""
         return subprocess.CompletedProcess(args, code, stdout, "")
@@ -63,6 +88,8 @@ class FakeSpooler(Spooler):
     def printer_attributes(self, uri: str) -> dict[str, str]:  # type: ignore[override]
         if uri.startswith("cups-pdf"):
             return {}
+        if self.attrs is not None:
+            return self.attrs
         return {
             "printer-make-and-model": "Test Printer 9000",
             "document-format-supported": "application/pdf,image/urf",
@@ -116,10 +143,11 @@ class _SilentNotifier:
         self.sent.append((event, text))
         return True
 
-    def on_state(self, event: str, state: str, text: str, **extra) -> bool:
-        if self.states.get(event) == state:
+    def on_state(self, event: str, state: str, text: str, *, key: str | None = None, **extra) -> bool:
+        memory_key = key or event
+        if self.states.get(memory_key) == state:
             return False
-        self.states[event] = state
+        self.states[memory_key] = state
         self.sent.append((event, text))
         return True
 
