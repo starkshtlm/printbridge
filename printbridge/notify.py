@@ -30,6 +30,7 @@ EVENT_LEVELS: dict[str, str] = {
     "unknown_origin": "warning",
     "rate_limit": "warning",
     "cert_expiring": "warning",
+    "supply_low": "warning",
     "probe_404": "warning",
     "new_client": "info",
     "job_failed": "warning",
@@ -45,18 +46,50 @@ class Notifier:
 
     # --- transport ---
 
+    PLACEHOLDER_MARKERS = ("<", ">", "YOUR_TOKEN", "example.com/webhook")
+
     @property
     def configured(self) -> bool:
-        return bool(self.settings.notify_webhook.strip())
+        return bool(self.settings.notify_webhook.strip()) and not self.is_placeholder
+
+    @property
+    def is_placeholder(self) -> bool:
+        """`https://api.telegram.org/bot<TOKEN>/…` is not a webhook, it is a note to self.
+
+        Worth its own check: a non-empty string used to be enough to report "webhook OK", so an
+        unfinished copy-paste looked configured while every alert quietly went to the outbox.
+        """
+        url = self.settings.notify_webhook.strip()
+        return bool(url) and any(marker in url for marker in self.PLACEHOLDER_MARKERS)
 
     @property
     def is_telegram(self) -> bool:
         return "api.telegram.org/bot" in self.settings.notify_webhook
 
     def describe(self) -> str:
+        if self.is_placeholder:
+            return "NOTIFY_WEBHOOK still holds a placeholder — alerts go to the outbox"
         if not self.configured:
             return f"outbox ({self.settings.outbox_path}) — no webhook configured"
         return "telegram webhook" if self.is_telegram else "generic JSON webhook"
+
+    def last_delivery_error(self) -> str:
+        """The most recent alert that could not be delivered, if any is still in the outbox."""
+        path = self.settings.outbox_path
+        if not path.exists():
+            return ""
+        try:
+            tail = path.read_text("utf-8").splitlines()[-20:]
+        except OSError:
+            return ""
+        for line in reversed(tail):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get("delivery_error"):
+                return f"{entry.get('ts', '')}: {entry['delivery_error']}"
+        return ""
 
     def _to_outbox(self, payload: dict[str, Any]) -> None:
         path = self.settings.outbox_path
@@ -97,12 +130,19 @@ class Notifier:
             return False
         return self._post(payload)
 
-    def on_state(self, event: str, state: str, text: str, **extra: Any) -> bool:
-        """Send only when `state` differs from the last state recorded for `event`."""
+    def on_state(self, event: str, state: str, text: str, *, key: str | None = None, **extra: Any) -> bool:
+        """Send only when `state` differs from the last state recorded for this subject.
+
+        `event` is the *kind* of alert (it decides the level and whether NOTIFY_EVENTS wants it);
+        `key` is the *subject* it is about. They differ whenever one event can apply to more than
+        one thing — two printers, two people — and keying the memory by event alone would make
+        them overwrite each other and alert on every single check.
+        """
+        memory_key = key or event
         if event not in self.settings.notify_event_set and event not in {"digest", "test"}:
-            self.store.set_alert_state(event, state, text)
+            self.store.set_alert_state(memory_key, state, text)
             return False
-        if not self.store.set_alert_state(event, state, text):
+        if not self.store.set_alert_state(memory_key, state, text):
             return False
         self.send(event, text, state=state, **extra)
         return True  # a message was emitted; `send` reports whether it left the machine

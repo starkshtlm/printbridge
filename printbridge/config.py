@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     log_request_path: bool = Field(False, alias="LOG_REQUEST_PATH")
     notify_webhook: str = Field("", alias="NOTIFY_WEBHOOK")
     notify_events: str = Field(
-        "printer_offline,unknown_origin,rate_limit,cert_expiring,probe_404",
+        "printer_offline,unknown_origin,rate_limit,cert_expiring,probe_404,supply_low",
         alias="NOTIFY_EVENTS",
     )
 
