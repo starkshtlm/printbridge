@@ -1,5 +1,5 @@
 # printbridge — MCP print server. Renders to PDF (WeasyPrint) and spools through CUPS.
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
